@@ -10,7 +10,7 @@
   "scripts": {
     "start": "tsx watch src/index.ts",
     "loadtest": "tsx loadtest/example.ts --room my_room --numClients 2",
-    "build": "npm run clean && tsc",
+    "build": "npm run clean && tsc && tsc-alias",
     "clean": "rimraf build",
     "test": "mocha -r tsx test/**_test.ts --exit --timeout 15000",
     "lib": "rimraf ../resistance-avalon-online-web/src/lib/ && mkdirp ../resistance-avalon-online-web/src/lib/schemas/ && schema-codegen src/lib/schemas/* --ts --output ../resistance-avalon-online-web/src/lib/schemas/ && copyfiles -f src/lib/types/* ../resistance-avalon-online-web/src/lib/types/  && copyfiles -f src/lib/consts.ts ../resistance-avalon-online-web/src/lib/"
@@ -30,6 +30,7 @@
     "mkdirp": "^3.0.1",
     "mocha": "^10.2.0",
     "rimraf": "^5.0.0",
+    "tsc-alias": "^1.8.8",
     "tsx": "^3.12.6",
     "typescript": "^5.0.4"
   },

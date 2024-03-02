@@ -1,51 +1,419 @@
-import { Room, Client } from "@colyseus/core";
-import { GameRoomState } from "./schema/GameRoomState";
-import { Player } from "./schema/Player";
+import { Room, Client, ServerError } from "@colyseus/core";
 
-type GameRoomOption = {
-  title: string;
-  password: string;
-};
-
-type ClientOption = {
-  nickname: string;
-};
+import { GameRoomState } from "@/lib/schemas/GameRoomState";
+import { Player } from "@/lib/schemas/Player";
+import {
+  ChooseMemberRequest,
+  GameEvent,
+  KickPlayerRequest,
+  KillMerlinRequest,
+  QuestRequest,
+  QuestResponse,
+  StartGameRequest,
+  VoteRequest,
+  VoteResponse,
+} from "@/lib/types/GameEvent";
+import { range, shuffle } from "@/utils";
+import {
+  ClientOption,
+  ExitCode,
+  GameRoomOption,
+  GameState,
+  Role,
+  RoomMetadata,
+} from "@/lib/types";
+import { QuestPlayers, Roles } from "@/lib/consts";
+import { PlayerSummary } from "@/lib/schemas/PlayerSummary";
 
 export class GameRoom extends Room<GameRoomState> {
   maxClients = 10;
 
   onCreate(options: GameRoomOption) {
-    this.setMetadata({
+    const metadata: RoomMetadata = {
       title: options.title,
-      players: this.clients.length,
-      maxPlayers: this.maxClients,
-    });
+      hasPassword: Boolean(options.password),
+    };
+    this.setMetadata(metadata);
     this.setState(new GameRoomState());
+    this.state.title = options.title.trim();
+    this.state.password = options.password?.trim();
+    this.handleMessages();
+  }
+
+  onAuth(_: Client, options: ClientOption) {
+    if (
+      this.state.password &&
+      this.state.password != options.password?.trim()
+    ) {
+      throw new ServerError(ExitCode.PasswordWrong, "wrong password");
+    }
+    return true;
   }
 
   onJoin(client: Client, options: ClientOption) {
-    const player = new Player();
-    player.name = options.nickname;
+    const player = new Player({ id: client.sessionId, name: options.nickname });
+
+    if (this.state.players.size == 0) {
+      this.state.masterId = client.sessionId;
+      player.isMaster = true;
+    }
 
     this.state.players.set(client.sessionId, player);
-    console.log(client.sessionId, "joined!");
   }
 
-  onLeave(client: Client, consented: boolean) {
-    this.state.players.delete(client.sessionId);
+  async onLeave(client: Client, consented: boolean) {
+    const player = this.state.players.get(client.sessionId);
+    if (!player) {
+      return;
+    }
+    player.isConnected = false;
 
-    console.log(client.sessionId, "left!");
+    try {
+      if (consented) {
+        throw new Error("consented leave");
+      }
+
+      await this.allowReconnection(client, 20);
+
+      player.isConnected = true;
+    } catch (e) {
+      this.state.players.delete(client.sessionId);
+      if (this.clients.length == 0) {
+        return;
+      }
+      this.checkVoteEnded();
+      this.checkQuestEnded();
+      this.checkGameEnded();
+      const master = this.clients.at(0);
+      this.state.masterId = master.sessionId;
+      this.state.players.get(master.sessionId).isMaster = true;
+    }
   }
 
-  onDispose() {
-    console.log("room", this.roomId, "disposing...");
-  }
+  onDispose() {}
 
   handleMessages() {
-    this.onMessage("game.start", (client, message) => {
-      //
-      // handle "type" message
-      //
+    this.onMessage(
+      GameEvent.StartGameRequest,
+      (client, _: StartGameRequest) => {
+        const players = this.clients.length;
+        if (client.sessionId == this.state.masterId && players >= 5) {
+          this.lock();
+          const roles: Role[] = [
+            Roles.Citizen,
+            Roles.Citizen,
+            Roles.Merlin,
+            Roles.Assassin,
+          ];
+          if (players == 5) {
+            roles.push(Roles.Mafia);
+          } else if (players == 6) {
+            roles.unshift(Roles.Percival);
+            if (Math.random() < 0.5) {
+              roles.push(Roles.Morgana);
+            } else {
+              roles.push(Roles.Mordred);
+            }
+          } else if (players == 7) {
+            if (Math.random() < 0.5) {
+              roles.unshift(Roles.Percival);
+              roles.push(Roles.Morgana);
+              if (Math.random() < 0.33) {
+                roles.push(Roles.Mordred);
+              } else if (Math.random() < 0.66) {
+                roles.push(Roles.Oberon);
+              } else {
+                roles.push(Roles.Mafia);
+              }
+            } else {
+              roles.unshift(Roles.Citizen);
+              roles.push(Roles.Mafia);
+              roles.push(Roles.Mafia);
+            }
+          } else if (players == 8) {
+            if (Math.random() < 0.5) {
+              roles.unshift(Roles.Citizen);
+              roles.unshift(Roles.Percival);
+              roles.push(Roles.Morgana);
+              if (Math.random() < 0.33) {
+                roles.push(Roles.Mordred);
+              } else if (Math.random() < 0.66) {
+                roles.push(Roles.Oberon);
+              } else {
+                roles.push(Roles.Mafia);
+              }
+            } else {
+              roles.unshift(Roles.Citizen);
+              roles.unshift(Roles.Citizen);
+              roles.push(Roles.Mafia);
+              roles.push(Roles.Mafia);
+            }
+          } else if (players == 9) {
+            roles.unshift(Roles.Citizen);
+            roles.unshift(Roles.Citizen);
+            roles.unshift(Roles.Percival);
+            roles.push(Roles.Morgana);
+            roles.push(Roles.Mordred);
+          } else if (players == 10) {
+            roles.unshift(Roles.Citizen);
+            roles.unshift(Roles.Citizen);
+            roles.unshift(Roles.Percival);
+            roles.push(Roles.Morgana);
+            roles.push(Roles.Mordred);
+            if (Math.random() < 0.5) {
+              roles.push(Roles.Oberon);
+            } else {
+              roles.push(Roles.Mafia);
+            }
+          }
+
+          this.state.roles.push(...roles.map((role) => role.name));
+
+          const roleMap: { [key: string]: Role } = {};
+
+          const allocated = [...roles];
+          const indices = range(this.clients.length);
+          shuffle(allocated);
+          shuffle(indices);
+          this.state.players.forEach((player) => {
+            player.role = allocated.pop();
+            player.index = indices.pop();
+            roleMap[player.name] = player.role;
+          });
+
+          this.clients.forEach((client) => {
+            const player = this.state.players.get(client.sessionId);
+            if (!player) {
+              return;
+            }
+            const view: string[] = [];
+            if (player.role.id == Roles.Merlin.id) {
+              view.push(
+                ...Object.entries(roleMap)
+                  .filter(
+                    ([_, role]) =>
+                      role.team == "mafia" && role.id != Roles.Mordred.id
+                  )
+                  .map(([name]) => name)
+              );
+            } else if (player.role.team == "mafia") {
+              view.push(
+                ...Object.entries(roleMap)
+                  .filter(
+                    ([_, role]) =>
+                      role.team == "mafia" && role.id != Roles.Oberon.id
+                  )
+                  .map(([name]) => name)
+              );
+            } else if (player.role.id == Roles.Percival.id) {
+              view.push(
+                ...Object.entries(roleMap)
+                  .filter(
+                    ([_, role]) =>
+                      role.id == Roles.Merlin.id || role.id == Roles.Morgana.id
+                  )
+                  .map(([name]) => name)
+              );
+            }
+            client.send(GameEvent.RoleSelectEvent, {
+              role: player.role,
+              view: view,
+            });
+          });
+
+          this.state.leader = this.getNextLeader();
+          this.state.gameState = GameState.Choose;
+          client.send(GameEvent.StartGameResponse);
+        } else {
+          client.send(GameEvent.StartGameResponse, {
+            status: -1,
+            message: "인원 수가 부족합니다.",
+          });
+        }
+      }
+    );
+    this.onMessage(
+      GameEvent.KickPlayerRequest,
+      (client, request: KickPlayerRequest) => {
+        const { id } = request;
+        const kicked = this.clients.getById(id);
+        if (kicked) {
+          kicked.leave(ExitCode.Kick);
+        }
+        client.send(GameEvent.KickPlayerResponse);
+      }
+    );
+    this.onMessage(
+      GameEvent.ChooseMemberRequest,
+      (client, request: ChooseMemberRequest) => {
+        const { memberIds } = request;
+        if (
+          this.state.gameState == GameState.Choose &&
+          client.sessionId == this.state.leader.id &&
+          memberIds.length ==
+            QuestPlayers[this.clients.length][this.state.round]
+        ) {
+          this.state.gameState = GameState.Vote;
+          this.state.questMembers = memberIds;
+          const members = memberIds.map((memberId) =>
+            this.getPlayerName(memberId)
+          );
+          this.broadcast(GameEvent.VoteEvent, {
+            members: members,
+          });
+          client.send(GameEvent.ChooseMemberResponse);
+        }
+      }
+    );
+    this.onMessage(GameEvent.VoteRequest, (client, request: VoteRequest) => {
+      const { approved } = request;
+      this.state.questApproveMap[client.sessionId] = approved;
+      this.checkVoteEnded();
     });
+    this.onMessage(GameEvent.QuestRequest, (client, request: QuestRequest) => {
+      const { succeed } = request;
+      this.state.questSucceedBuffer.push(succeed);
+      this.checkQuestEnded();
+    });
+    this.onMessage(
+      GameEvent.KillMerlinRequest,
+      (client, request: KillMerlinRequest) => {
+        const { merlinId } = request;
+        let merlin: Player | null = null;
+        this.state.players.forEach((player) => {
+          if (player.role.id == Roles.Merlin.id) {
+            merlin = player;
+          }
+        });
+        if (merlin?.id == merlinId) {
+          this.state.winTeam = "mafia";
+        } else {
+          this.state.winTeam = "citizen";
+        }
+        this.revealRoles();
+        this.state.gameState = GameState.Result;
+        client.send(GameEvent.KillMerlinResponse);
+      }
+    );
+    this.onMessage(GameEvent.ResetRoomRequest, (client) => {
+      const newState = new GameRoomState();
+      newState.players = this.state.players;
+      this.setState(newState);
+      this.unlock();
+      client.send(GameEvent.ResetRoomResponse);
+    });
+  }
+
+  checkVoteEnded() {
+    if (
+      this.state.gameState == GameState.Vote &&
+      Object.keys(this.state.questApproveMap).length >= this.clients.length
+    ) {
+      const approved = Object.entries(this.state.questApproveMap).filter(
+        ([_, value]) => value
+      );
+      const disapproved = Object.entries(this.state.questApproveMap).filter(
+        ([_, value]) => !value
+      );
+      const response: VoteResponse = {
+        approved: [...approved].map(([id]) => this.getPlayerName(id)),
+        disapproved: [...disapproved].map(([id]) => this.getPlayerName(id)),
+      };
+      this.state.questApproveMap = {};
+      this.broadcast(GameEvent.VoteResponse, response);
+      if (disapproved.length > approved.length) {
+        this.state.noQuestCount++;
+        if (this.state.noQuestCount == 5) {
+          this.state.questFailed++;
+          this.state.round++;
+        }
+        this.state.leader = this.getNextLeader();
+        this.state.gameState = GameState.Choose;
+        this.checkGameEnded();
+      } else {
+        this.state.noQuestCount = 0;
+        this.state.gameState = GameState.Quest;
+        this.state.questMembers.forEach((id) => {
+          const client = this.clients.getById(id);
+          if (!client) {
+            return;
+          }
+          client.send(GameEvent.QuestEvent);
+        });
+      }
+    }
+  }
+
+  checkQuestEnded() {
+    if (
+      this.state.gameState == GameState.Quest &&
+      this.state.questSucceedBuffer.length >=
+        QuestPlayers[this.clients.length][this.state.round]
+    ) {
+      const succeed = this.state.questSucceedBuffer.filter((v) => v).length;
+      const failed = this.state.questSucceedBuffer.length - succeed;
+      this.state.questSucceedBuffer = [];
+      if (
+        failed == 0 ||
+        (this.state.round == 3 && this.clients.length >= 7 && failed == 1)
+      ) {
+        this.state.questSucceed++;
+      } else {
+        this.state.questFailed++;
+      }
+      const response: QuestResponse = {
+        succeed: succeed,
+        failed: failed,
+      };
+      this.broadcast(GameEvent.QuestResponse, response);
+      this.state.round++;
+      this.state.leader = this.getNextLeader();
+      this.state.gameState = GameState.Choose;
+      this.checkGameEnded();
+    }
+  }
+
+  checkGameEnded() {
+    if (this.state.questSucceed >= 3) {
+      this.state.gameState = GameState.End;
+    } else if (this.state.questFailed >= 3) {
+      this.revealRoles();
+      this.state.winTeam = "mafia";
+      this.state.gameState = GameState.Result;
+    }
+  }
+
+  revealRoles() {
+    this.state.players.forEach((player) => {
+      this.state.result.push(
+        new PlayerSummary({
+          id: player.id,
+          name: player.name,
+          team: player.role.team,
+          role: player.role.name,
+        })
+      );
+    });
+  }
+
+  getPlayerName(id: string) {
+    return this.state.players.get(id)?.name || "(알 수 없음)";
+  }
+
+  getNextLeader() {
+    const players = [...this.state.players.values()].sort(
+      (a, b) => a.index - b.index
+    );
+    this.state.leaderIndex++;
+    if (this.state.leaderIndex >= this.clients.length) {
+      this.state.leaderIndex = 0;
+      return players[0];
+    }
+    for (const player of players) {
+      if (player.index >= this.state.leaderIndex) {
+        this.state.leaderIndex = player.index;
+        return player;
+      }
+    }
   }
 }

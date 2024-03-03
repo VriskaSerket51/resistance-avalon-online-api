@@ -5,6 +5,7 @@ export enum GameEvent {
   StartGameResponse = "game.start.response",
   KickPlayerRequest = "game.kick.player.request",
   KickPlayerResponse = "game.kick.player.response",
+  GameTerminatedEvent = "event.game.terminated",
   RoleSelectEvent = "event.role.select",
   ChooseMemberRequest = "choose.member.request",
   ChooseMemberResponse = "choose.member.response",
@@ -67,3 +68,5 @@ export type KillMerlinRequest = {
 export type KickPlayerRequest = {
   id: string;
 };
+
+export type GameTerminatedEvent = DefaultResponse & {};

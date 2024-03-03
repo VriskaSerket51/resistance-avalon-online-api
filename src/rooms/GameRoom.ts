@@ -5,6 +5,7 @@ import { Player } from "@/lib/schemas/Player";
 import {
   ChooseMemberRequest,
   GameEvent,
+  GameTerminatedEvent,
   KickPlayerRequest,
   KillMerlinRequest,
   QuestRequest,
@@ -81,12 +82,21 @@ export class GameRoom extends Room<GameRoomState> {
       if (this.clients.length == 0) {
         return;
       }
-      this.checkVoteEnded();
-      this.checkQuestEnded();
-      this.checkGameEnded();
       const master = this.clients.at(0);
       this.state.masterId = master.sessionId;
       this.state.players.get(master.sessionId).isMaster = true;
+      if (this.clients.length < 5) {
+        const event: GameTerminatedEvent = {
+          status: -1,
+          message: "인원 수가 부족하여 게임이 강제 종료되었습니다.",
+        };
+        this.broadcast(GameEvent.GameTerminatedEvent, event);
+        this.state.gameState = GameState.Wait;
+        return;
+      }
+      this.checkVoteEnded();
+      this.checkQuestEnded();
+      this.checkGameEnded();
     }
   }
 
@@ -96,8 +106,12 @@ export class GameRoom extends Room<GameRoomState> {
     this.onMessage(
       GameEvent.StartGameRequest,
       (client, _: StartGameRequest) => {
-        const players = this.clients.length;
-        if (client.sessionId == this.state.masterId && players >= 5) {
+        const players = this.state.players.size;
+        if (
+          this.state.gameState == GameState.Wait &&
+          client.sessionId == this.state.masterId &&
+          players >= 5
+        ) {
           this.lock();
           const roles: Role[] = [
             Roles.Citizen,
@@ -172,7 +186,7 @@ export class GameRoom extends Room<GameRoomState> {
           const roleMap: { [key: string]: Role } = {};
 
           const allocated = [...roles];
-          const indices = range(this.clients.length);
+          const indices = range(this.state.players.size);
           shuffle(allocated);
           shuffle(indices);
           this.state.players.forEach((player) => {
@@ -250,8 +264,10 @@ export class GameRoom extends Room<GameRoomState> {
         if (
           this.state.gameState == GameState.Choose &&
           client.sessionId == this.state.leader.id &&
+          this.state.players.size >= 5 &&
+          this.state.players.size <= 10 &&
           memberIds.length ==
-            QuestPlayers[this.clients.length][this.state.round]
+            QuestPlayers[this.state.players.size][this.state.round]
         ) {
           this.state.gameState = GameState.Vote;
           this.state.questMembers = memberIds;
@@ -307,7 +323,7 @@ export class GameRoom extends Room<GameRoomState> {
   checkVoteEnded() {
     if (
       this.state.gameState == GameState.Vote &&
-      Object.keys(this.state.questApproveMap).length >= this.clients.length
+      Object.keys(this.state.questApproveMap).length >= this.state.players.size
     ) {
       const approved = Object.entries(this.state.questApproveMap).filter(
         ([_, value]) => value
@@ -348,14 +364,16 @@ export class GameRoom extends Room<GameRoomState> {
     if (
       this.state.gameState == GameState.Quest &&
       this.state.questSucceedBuffer.length >=
-        QuestPlayers[this.clients.length][this.state.round]
+        this.state.questMembers.filter((id) =>
+          Boolean(this.state.players.get(id))
+        ).length
     ) {
       const succeed = this.state.questSucceedBuffer.filter((v) => v).length;
       const failed = this.state.questSucceedBuffer.length - succeed;
       this.state.questSucceedBuffer = [];
       if (
         failed == 0 ||
-        (this.state.round == 3 && this.clients.length >= 7 && failed == 1)
+        (this.state.round == 3 && this.state.players.size >= 7 && failed == 1)
       ) {
         this.state.questSucceed++;
       } else {
@@ -405,7 +423,7 @@ export class GameRoom extends Room<GameRoomState> {
       (a, b) => a.index - b.index
     );
     this.state.leaderIndex++;
-    if (this.state.leaderIndex >= this.clients.length) {
+    if (this.state.leaderIndex >= this.state.players.size) {
       this.state.leaderIndex = 0;
       return players[0];
     }

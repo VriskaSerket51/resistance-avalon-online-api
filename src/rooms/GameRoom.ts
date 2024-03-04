@@ -52,18 +52,23 @@ export class GameRoom extends Room<GameRoomState> {
   }
 
   onJoin(client: Client, options: ClientOption) {
-    const player = new Player({ id: client.sessionId, name: options.nickname });
+    const oldPlayer = this.state.players.get(client.id);
+    if (oldPlayer) {
+      oldPlayer.isConnected = true;
+      return;
+    }
+    const player = new Player({ id: client.id, name: options.nickname });
 
     if (this.state.players.size == 0) {
-      this.state.masterId = client.sessionId;
+      this.state.masterId = client.id;
       player.isMaster = true;
     }
 
-    this.state.players.set(client.sessionId, player);
+    this.state.players.set(client.id, player);
   }
 
   async onLeave(client: Client, consented: boolean) {
-    const player = this.state.players.get(client.sessionId);
+    const player = this.state.players.get(client.id);
     if (!player) {
       return;
     }
@@ -74,17 +79,24 @@ export class GameRoom extends Room<GameRoomState> {
         throw new Error("consented leave");
       }
 
+      if (player.isKicked) {
+        throw new Error("kicked player");
+      }
+
       await this.allowReconnection(client, 20);
 
       player.isConnected = true;
     } catch (e) {
-      this.state.players.delete(client.sessionId);
+      if (player.isConnected) {
+        return;
+      }
+      this.state.players.delete(client.id);
       if (this.clients.length == 0) {
         return;
       }
       const master = this.clients.at(0);
-      this.state.masterId = master.sessionId;
-      this.state.players.get(master.sessionId).isMaster = true;
+      this.state.masterId = master.id;
+      this.state.players.get(master.id).isMaster = true;
       if (this.clients.length < 5) {
         const event: GameTerminatedEvent = {
           status: -1,
@@ -109,7 +121,7 @@ export class GameRoom extends Room<GameRoomState> {
         const players = this.state.players.size;
         if (
           this.state.gameState == GameState.Wait &&
-          client.sessionId == this.state.masterId &&
+          client.id == this.state.masterId &&
           players >= 5
         ) {
           this.lock();
@@ -196,7 +208,7 @@ export class GameRoom extends Room<GameRoomState> {
           });
 
           this.clients.forEach((client) => {
-            const player = this.state.players.get(client.sessionId);
+            const player = this.state.players.get(client.id);
             if (!player) {
               return;
             }
@@ -251,8 +263,12 @@ export class GameRoom extends Room<GameRoomState> {
       (client, request: KickPlayerRequest) => {
         const { id } = request;
         const kicked = this.clients.getById(id);
+        const kickedPlayer = this.state.players.get(id);
         if (kicked) {
           kicked.leave(ExitCode.Kick);
+        }
+        if (kickedPlayer) {
+          kickedPlayer.isKicked = true;
         }
         client.send(GameEvent.KickPlayerResponse);
       }
@@ -263,7 +279,7 @@ export class GameRoom extends Room<GameRoomState> {
         const { memberIds } = request;
         if (
           this.state.gameState == GameState.Choose &&
-          client.sessionId == this.state.leader.id &&
+          client.id == this.state.leader.id &&
           this.state.players.size >= 5 &&
           this.state.players.size <= 10 &&
           memberIds.length ==
@@ -283,7 +299,7 @@ export class GameRoom extends Room<GameRoomState> {
     );
     this.onMessage(GameEvent.VoteRequest, (client, request: VoteRequest) => {
       const { approved } = request;
-      this.state.questApproveMap[client.sessionId] = approved;
+      this.state.questApproveMap[client.id] = approved;
       this.checkVoteEnded();
     });
     this.onMessage(GameEvent.QuestRequest, (client, request: QuestRequest) => {

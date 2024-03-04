@@ -11,6 +11,7 @@ export class Player extends Schema {
   @type("string") id: string;
   @type("boolean") isMaster: boolean = false;
   @type("boolean") isConnected: boolean = true;
+  @type("boolean") isKicked: boolean = true;
   @type("string") name: string;
   @type("number") index: number;
   role: Role;

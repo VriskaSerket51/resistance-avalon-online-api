@@ -52,23 +52,23 @@ export class GameRoom extends Room<GameRoomState> {
   }
 
   onJoin(client: Client, options: ClientOption) {
-    const oldPlayer = this.state.players.get(client.id);
+    const oldPlayer = this.state.players.get(client.sessionId);
     if (oldPlayer) {
       oldPlayer.isConnected = true;
       return;
     }
-    const player = new Player({ id: client.id, name: options.nickname });
+    const player = new Player({ id: client.sessionId, name: options.nickname });
 
     if (this.state.players.size == 0) {
-      this.state.masterId = client.id;
+      this.state.masterId = client.sessionId;
       player.isMaster = true;
     }
 
-    this.state.players.set(client.id, player);
+    this.state.players.set(client.sessionId, player);
   }
 
   async onLeave(client: Client, consented: boolean) {
-    const player = this.state.players.get(client.id);
+    const player = this.state.players.get(client.sessionId);
     if (!player) {
       return;
     }
@@ -90,14 +90,14 @@ export class GameRoom extends Room<GameRoomState> {
       if (player.isConnected) {
         return;
       }
-      this.state.players.delete(client.id);
+      this.state.players.delete(client.sessionId);
       if (this.clients.length == 0) {
         return;
       }
       const master = this.clients.at(0);
       this.state.masterId = master.id;
       this.state.players.get(master.id).isMaster = true;
-      if (this.clients.length < 5) {
+      if (this.state.gameState != GameState.Wait && this.clients.length < 5) {
         const event: GameTerminatedEvent = {
           status: -1,
           message: "인원 수가 부족하여 게임이 강제 종료되었습니다.",
@@ -121,7 +121,7 @@ export class GameRoom extends Room<GameRoomState> {
         const players = this.state.players.size;
         if (
           this.state.gameState == GameState.Wait &&
-          client.id == this.state.masterId &&
+          client.sessionId == this.state.masterId &&
           players >= 5
         ) {
           this.lock();
@@ -208,7 +208,7 @@ export class GameRoom extends Room<GameRoomState> {
           });
 
           this.clients.forEach((client) => {
-            const player = this.state.players.get(client.id);
+            const player = this.state.players.get(client.sessionId);
             if (!player) {
               return;
             }
@@ -279,7 +279,7 @@ export class GameRoom extends Room<GameRoomState> {
         const { memberIds } = request;
         if (
           this.state.gameState == GameState.Choose &&
-          client.id == this.state.leader.id &&
+          client.sessionId == this.state.leader.id &&
           this.state.players.size >= 5 &&
           this.state.players.size <= 10 &&
           memberIds.length ==
@@ -299,7 +299,7 @@ export class GameRoom extends Room<GameRoomState> {
     );
     this.onMessage(GameEvent.VoteRequest, (client, request: VoteRequest) => {
       const { approved } = request;
-      this.state.questApproveMap[client.id] = approved;
+      this.state.questApproveMap[client.sessionId] = approved;
       this.checkVoteEnded();
     });
     this.onMessage(GameEvent.QuestRequest, (client, request: QuestRequest) => {

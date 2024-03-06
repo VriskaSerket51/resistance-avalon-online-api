@@ -2,7 +2,6 @@ import { ArraySchema, Schema, MapSchema, type } from "@colyseus/schema";
 import { Player } from "./Player";
 import { GameState, Team } from "../types";
 import { PlayerSummary } from "./PlayerSummary";
-import { Chat } from "./Chat";
 
 export class GameRoomState extends Schema {
   @type("string") title: string;

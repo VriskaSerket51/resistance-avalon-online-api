@@ -19,6 +19,8 @@ export enum GameEvent {
   KillMerlinResponse = "game.end.assasin.response",
   ResetRoomRequest = "game.restart.request",
   ResetRoomResponse = "game.restart.response",
+  GameChatRequest = "game.chat.request",
+  GameChatResponse = "game.chat.response",
 }
 
 type DefaultResponse = {
@@ -70,3 +72,14 @@ export type KickPlayerRequest = {
 };
 
 export type GameTerminatedEvent = DefaultResponse & {};
+
+export type GameChatRequest = {
+  text: string;
+  datetime: number;
+};
+
+export type GameChatRespone = {
+  name: string;
+  text: string;
+  datetime: number;
+};

@@ -4,6 +4,8 @@ import { GameRoomState } from "@/lib/schemas/GameRoomState";
 import { Player } from "@/lib/schemas/Player";
 import {
   ChooseMemberRequest,
+  GameChatRequest,
+  GameChatRespone,
   GameEvent,
   GameTerminatedEvent,
   KickPlayerRequest,
@@ -334,6 +336,18 @@ export class GameRoom extends Room<GameRoomState> {
       this.unlock();
       client.send(GameEvent.ResetRoomResponse);
     });
+    this.onMessage(
+      GameEvent.GameChatRequest,
+      (client, request: GameChatRequest) => {
+        const player = this.state.players.get(client.sessionId);
+        const response: GameChatRespone = {
+          name: player.name,
+          text: request.text,
+          datetime: request.datetime,
+        };
+        this.broadcast(GameEvent.GameChatResponse, response);
+      }
+    );
   }
 
   checkVoteEnded() {

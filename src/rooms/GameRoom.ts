@@ -44,22 +44,20 @@ export class GameRoom extends Room<GameRoomState> {
   }
 
   onAuth(_: Client, options: ClientOption) {
-    if (
-      this.state.password &&
-      this.state.password != options.password?.trim()
-    ) {
+    const { password } = options;
+    if (this.state.password && this.state.password != password?.trim()) {
       throw new ServerError(ExitCode.PasswordWrong, "wrong password");
     }
     return true;
   }
 
   onJoin(client: Client, options: ClientOption) {
-    const oldPlayer = this.state.players.get(client.sessionId);
-    if (oldPlayer) {
-      oldPlayer.isConnected = true;
-      return;
-    }
-    const player = new Player({ id: client.sessionId, name: options.nickname });
+    const { nickname } = options;
+
+    const player = new Player({
+      id: client.sessionId,
+      name: nickname,
+    });
 
     if (this.state.players.size == 0) {
       this.state.masterId = client.sessionId;
@@ -85,7 +83,16 @@ export class GameRoom extends Room<GameRoomState> {
         throw new Error("kicked player");
       }
 
-      await this.allowReconnection(client, 20);
+      const reconnection = this.allowReconnection(client, "manual");
+
+      const interval = setInterval(() => {
+        if (this.state.gameState == GameState.Result) {
+          reconnection.reject();
+          clearInterval(interval);
+        }
+      }, 1000);
+
+      await reconnection;
 
       player.isConnected = true;
     } catch (e) {
@@ -229,7 +236,9 @@ export class GameRoom extends Room<GameRoomState> {
                 ...Object.entries(roleMap)
                   .filter(
                     ([_, role]) =>
-                      role.team == "mafia" && role.id != Roles.Oberon.id
+                      player.role.id != Roles.Oberon.id &&
+                      role.team == "mafia" &&
+                      role.id != Roles.Oberon.id
                   )
                   .map(([name]) => name)
               );

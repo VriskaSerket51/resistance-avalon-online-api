@@ -25,6 +25,6 @@ export class GameRoomState extends Schema {
   masterId: string = "";
   leaderIndex: number = -1;
   questApproveMap: { [key: string]: boolean } = {};
-  questSucceedBuffer: boolean[] = [];
+  questSucceedMap: { [key: string]: boolean } = {};
   questMembers: string[];
 }

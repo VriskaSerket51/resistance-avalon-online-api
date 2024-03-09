@@ -12,6 +12,7 @@ import {
   KillMerlinRequest,
   QuestRequest,
   QuestResponse,
+  RoleSelectEvent,
   StartGameRequest,
   VoteRequest,
   VoteResponse,
@@ -68,11 +69,26 @@ export class GameRoom extends Room<GameRoomState> {
   }
 
   async onLeave(client: Client, consented: boolean) {
+    if (this.clients.length == 0) {
+      Object.values(this._reconnections).forEach(([_, reconnection]) => {
+        reconnection.reject();
+      });
+      return;
+    }
+
+    this._reconnections;
+
     const player = this.state.players.get(client.sessionId);
     if (!player) {
       return;
     }
     player.isConnected = false;
+
+    if (this.state.gameState != GameState.Wait) {
+      this.checkVoteEnded();
+      this.checkQuestEnded();
+      this.checkGameEnded();
+    }
 
     try {
       if (consented) {
@@ -83,22 +99,41 @@ export class GameRoom extends Room<GameRoomState> {
         throw new Error("kicked player");
       }
 
-      const reconnection = this.allowReconnection(client, "manual");
-
-      const interval = setInterval(() => {
-        if (this.state.gameState == GameState.Result) {
-          reconnection.reject();
-          clearInterval(interval);
-        }
-      }, 1000);
-
-      await reconnection;
+      if (this.state.gameState == GameState.Wait) {
+        await this.allowReconnection(client, 10);
+      } else {
+        const reconnection = this.allowReconnection(client, "manual");
+        await reconnection;
+      }
 
       player.isConnected = true;
-    } catch (e) {
-      if (player.isConnected) {
-        return;
+
+      if (this.state.gameState != GameState.Wait) {
+        const event: RoleSelectEvent = {
+          role: player.role,
+          view: player.view,
+        };
+        client.send(GameEvent.RoleSelectEvent, event);
       }
+
+      if (
+        this.state.gameState == GameState.Vote &&
+        !this.state.questApproveMap[client.sessionId]
+      ) {
+        const members = this.state.questMembers.map((memberId) =>
+          this.getPlayerName(memberId)
+        );
+        client.send(GameEvent.VoteEvent, {
+          members: members,
+        });
+      } else if (
+        this.state.gameState == GameState.Quest &&
+        this.state.questMembers.includes(client.sessionId) &&
+        !this.state.questSucceedMap[client.sessionId]
+      ) {
+        client.send(GameEvent.QuestEvent);
+      }
+    } catch (e) {
       this.state.players.delete(client.sessionId);
       if (this.clients.length == 0) {
         return;
@@ -115,9 +150,6 @@ export class GameRoom extends Room<GameRoomState> {
         this.state.gameState = GameState.Wait;
         return;
       }
-      this.checkVoteEnded();
-      this.checkQuestEnded();
-      this.checkGameEnded();
     }
   }
 
@@ -213,7 +245,7 @@ export class GameRoom extends Room<GameRoomState> {
           this.state.players.forEach((player) => {
             player.role = allocated.pop();
             player.index = indices.pop();
-            roleMap[player.name] = player.role;
+            roleMap[player.id] = player.role;
           });
 
           this.clients.forEach((client) => {
@@ -229,18 +261,19 @@ export class GameRoom extends Room<GameRoomState> {
                     ([_, role]) =>
                       role.team == "mafia" && role.id != Roles.Mordred.id
                   )
-                  .map(([name]) => name)
+                  .map(([id]) => this.getPlayerName(id))
               );
             } else if (player.role.team == "mafia") {
               view.push(
                 ...Object.entries(roleMap)
                   .filter(
-                    ([_, role]) =>
+                    ([id, role]) =>
                       player.role.id != Roles.Oberon.id &&
+                      player.id != id &&
                       role.team == "mafia" &&
                       role.id != Roles.Oberon.id
                   )
-                  .map(([name]) => name)
+                  .map(([id]) => this.getPlayerName(id))
               );
             } else if (player.role.id == Roles.Percival.id) {
               view.push(
@@ -249,9 +282,10 @@ export class GameRoom extends Room<GameRoomState> {
                     ([_, role]) =>
                       role.id == Roles.Merlin.id || role.id == Roles.Morgana.id
                   )
-                  .map(([name]) => name)
+                  .map(([id]) => this.getPlayerName(id))
               );
             }
+            player.view = view;
             client.send(GameEvent.RoleSelectEvent, {
               role: player.role,
               view: view,
@@ -310,40 +344,53 @@ export class GameRoom extends Room<GameRoomState> {
     );
     this.onMessage(GameEvent.VoteRequest, (client, request: VoteRequest) => {
       const { approved } = request;
-      this.state.questApproveMap[client.sessionId] = approved;
-      this.checkVoteEnded();
+      if (this.state.gameState == GameState.Vote) {
+        this.state.questApproveMap[client.sessionId] = approved;
+        this.checkVoteEnded();
+      }
     });
     this.onMessage(GameEvent.QuestRequest, (client, request: QuestRequest) => {
       const { succeed } = request;
-      this.state.questSucceedBuffer.push(succeed);
-      this.checkQuestEnded();
+      if (
+        this.state.gameState == GameState.Quest &&
+        this.state.questMembers.includes(client.sessionId)
+      ) {
+        this.state.questSucceedMap[client.sessionId] = succeed;
+        this.checkQuestEnded();
+      }
     });
     this.onMessage(
       GameEvent.KillMerlinRequest,
       (client, request: KillMerlinRequest) => {
         const { merlinId } = request;
-        let merlin: Player | null = null;
-        this.state.players.forEach((player) => {
-          if (player.role.id == Roles.Merlin.id) {
-            merlin = player;
+        if (this.state.gameState == GameState.End) {
+          let merlin: Player | null = null;
+          for (const [_, player] of this.state.players) {
+            if (player.role.id == Roles.Merlin.id) {
+              merlin = player;
+              break;
+            }
           }
-        });
-        if (merlin?.id == merlinId) {
-          this.state.winTeam = "mafia";
-        } else {
-          this.state.winTeam = "citizen";
+          if (merlin?.id == merlinId) {
+            this.state.winTeam = "mafia";
+          } else {
+            this.state.winTeam = "citizen";
+          }
+          this.revealRoles();
+          this.state.gameState = GameState.Result;
+          client.send(GameEvent.KillMerlinResponse);
         }
-        this.revealRoles();
-        this.state.gameState = GameState.Result;
-        client.send(GameEvent.KillMerlinResponse);
       }
     );
     this.onMessage(GameEvent.ResetRoomRequest, (client) => {
-      const newState = new GameRoomState();
-      newState.players = this.state.players;
-      this.setState(newState);
-      this.unlock();
-      client.send(GameEvent.ResetRoomResponse);
+      if (this.state.masterId == client.sessionId) {
+        this.resetGame();
+        Object.values(this._reconnections).forEach(([_, reconnection]) => {
+          reconnection.reject();
+        });
+        this.unlock();
+        client.send(GameEvent.ResetRoomResponse);
+      }
     });
     this.onMessage(
       GameEvent.GameChatRequest,
@@ -359,10 +406,26 @@ export class GameRoom extends Room<GameRoomState> {
     );
   }
 
+  resetGame() {
+    this.state.gameState = GameState.Wait;
+    this.state.roles.clear();
+    this.state.round = 0;
+    this.state.leader = undefined;
+    this.state.leaderIndex = -1;
+    this.state.questSucceed = 0;
+    this.state.questFailed = 0;
+    this.state.noQuestCount = 0;
+    this.state.winTeam = undefined;
+    this.state.result.clear();
+  }
+
   checkVoteEnded() {
+    const voted = Object.keys(this.state.questApproveMap);
     if (
       this.state.gameState == GameState.Vote &&
-      Object.keys(this.state.questApproveMap).length >= this.state.players.size
+      [...this.state.players.values()].filter(
+        (player) => player.isConnected && !voted.includes(player.id)
+      ).length == 0
     ) {
       const approved = Object.entries(this.state.questApproveMap).filter(
         ([_, value]) => value
@@ -400,16 +463,19 @@ export class GameRoom extends Room<GameRoomState> {
   }
 
   checkQuestEnded() {
+    const succeedBuffer = Object.keys(this.state.questSucceedMap);
     if (
       this.state.gameState == GameState.Quest &&
-      this.state.questSucceedBuffer.length >=
-        this.state.questMembers.filter((id) =>
-          Boolean(this.state.players.get(id))
-        ).length
+      [...this.state.questMembers].filter(
+        (id) =>
+          this.state.players.get(id)?.isConnected && !succeedBuffer.includes(id)
+      ).length == 0
     ) {
-      const succeed = this.state.questSucceedBuffer.filter((v) => v).length;
-      const failed = this.state.questSucceedBuffer.length - succeed;
-      this.state.questSucceedBuffer = [];
+      const succeed = Object.values(this.state.questSucceedMap).filter(
+        (v) => v
+      ).length;
+      const failed = succeedBuffer.length - succeed;
+      this.state.questSucceedMap = {};
       if (
         failed == 0 ||
         (this.state.round == 3 && this.state.players.size >= 7 && failed == 1)
@@ -464,10 +530,16 @@ export class GameRoom extends Room<GameRoomState> {
     this.state.leaderIndex++;
     if (this.state.leaderIndex >= this.state.players.size) {
       this.state.leaderIndex = 0;
-      return players[0];
     }
     for (const player of players) {
-      if (player.index >= this.state.leaderIndex) {
+      if (player.isConnected && player.index >= this.state.leaderIndex) {
+        this.state.leaderIndex = player.index;
+        return player;
+      }
+    }
+    this.state.leaderIndex = 0;
+    for (const player of players) {
+      if (player.isConnected && player.index >= this.state.leaderIndex) {
         this.state.leaderIndex = player.index;
         return player;
       }

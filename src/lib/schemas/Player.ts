@@ -15,4 +15,5 @@ export class Player extends Schema {
   @type("string") name: string;
   @type("number") index: number;
   role: Role;
+  view: string[];
 }
